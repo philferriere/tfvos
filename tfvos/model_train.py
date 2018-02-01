@@ -1,5 +1,5 @@
 """
-model_finetune.py
+model_train.py
 
 Segmentation network offline trainer.
 

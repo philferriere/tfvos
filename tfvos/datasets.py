@@ -47,9 +47,6 @@ import random
 from tqdm import tqdm, trange
 # from tqdm import tqdm_notebook as tqdm, trange
 # from tqdm import tqdm_notebook, trange
-from IPython.display import HTML
-import io, base64
-import imageio
 import bboxes
 import optflow
 import visualize
@@ -778,23 +775,3 @@ class davis16(object):
                 frame_with_overlay = visualize.draw_box(frame_with_overlay, bbox, bbox_color) # y1, x1, y2, x2 order
                 frames_with_overlays[frame_number] = frame_with_overlay
         return frames_with_overlays
-
-    def show_frames(self, frames_with_overlays, title=None):
-        """Display video frames individually."""
-        visualize.display_images(frames_with_overlays)
-
-    def make_clip(self, video_clip, frames_with_overlays):
-        """Turn video into an MP4 clip.
-        # Needs ffmpeg exe on Windows. You can obtain it with either:
-        #  - install using conda: conda install ffmpeg -c conda-forge
-        #  - download by calling: imageio.plugins.ffmpeg.download()
-        """
-        imageio.mimwrite(video_clip, np.array(frames_with_overlays), fps=30)
-
-    def show_clip(self, video_clip):
-        # Display video
-        video = io.open(video_clip, 'r+b').read()
-        encoded = base64.b64encode(video)
-        return HTML(data='''<video alt="test" controls>
-                        <source src="data:video/mp4;base64,{0}" type="video/mp4" />
-                     </video>'''.format(encoded.decode('ascii')))
