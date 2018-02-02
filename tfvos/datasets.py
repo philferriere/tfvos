@@ -85,11 +85,13 @@ class davis16(object):
         # Initialize data members
         self.dataset_root = dataset_root
         self.options = options
+
         self.images_train = []
         self.images_train_path = []
         self.masks_train = []
         self.masks_train_path = []
         self.cache_needs_refresh = False
+        self.secondary_cache_needs_refresh = False
         self.videos = {}
         self.video_names = []
         self.video_frame_idx = {}
@@ -97,6 +99,13 @@ class davis16(object):
         self.flow_norms_train = [] if self.options['use_optical_flow'] else None
         self.warped_prev_masks_train = [] if self.options['use_warped_masks'] else None
         self.masks_bboxes_train = [] if self.options['use_bboxes'] else None
+
+        self.images_test = []
+        self.images_test_path = []
+        self.videos_test = {}
+        self.video_names_test = []
+        self.video_frame_idx_test = {}
+        self.num_videos_test = 0
 
         # Define types of data augmentation
         self.data_aug_scales = [0.5, 0.8]
@@ -111,11 +120,11 @@ class davis16(object):
             if self.options['optical_flow_mgr'] == 'pyflow':
                 self.optflow = optflow.optflow()
             self._use_optical_flows()
-        if self.options['use_bboxes'] and len(self.masks_bboxes_train) == 0:
-            self._use_mask_bboxes()
+            if self.options['use_bboxes'] and len(self.masks_bboxes_train) == 0:
+                self._use_mask_bboxes()
 
         # Write ndarrays to cache, if requested
-        if self.options['use_cache'] and self.cache_needs_refresh:
+        if self.options['use_cache'] and (self.cache_needs_refresh or self.secondary_cache_needs_refresh):
             self._write_to_cache()
 
         # Load testing images (or paths)
@@ -144,6 +153,8 @@ class davis16(object):
         """Construct the list of file names for the cache
          """
         cache_basename = os.path.basename(os.path.normpath(self.dataset_root))
+        if self.options['data_aug']:
+            cache_basename = cache_basename + '_aug'            
         self.videos_train_cache = os.path.join(self.dataset_root, cache_basename + '_videos_train.npy')
         self.video_frame_idx_train_cache = os.path.join(self.dataset_root, cache_basename + '_video_frame_idx_train.npy')
         self.images_train_cache = os.path.join(self.dataset_root, cache_basename + '_images_train.npy')
@@ -190,25 +201,26 @@ class davis16(object):
         """Write (augmented) images and masks to disk
          """
         print("Writing ndarrays to cache...")
-
-        if self.videos_train_cache:
-            np.save(self.videos_train_cache, self.videos)
-        if self.video_frame_idx_train_cache:
-            np.save(self.video_frame_idx_train_cache, self.video_frame_idx)
-        if self.images_train_cache:
-            np.save(self.images_train_cache, self.images_train)
-        if self.images_train_path_cache:
-            np.save(self.images_train_path_cache, self.images_train_path)
-        if self.masks_train_cache:
-            np.save(self.masks_train_cache, self.masks_train)
-        if self.masks_train_path_cache:
-            np.save(self.masks_train_path_cache, self.masks_train_path)
-        if self.flow_norms_train:
-            np.save(self.flow_norms_train_cache, self.flow_norms_train)
-        if self.warped_prev_masks_train:
-            np.save(self.warped_prev_masks_train_cache, self.warped_prev_masks_train)
-        if self.masks_bboxes_train:
-            np.save(self.masks_bboxes_train_cache, self.masks_bboxes_train)
+        if self.cache_needs_refresh:
+            if self.videos_train_cache:
+                np.save(self.videos_train_cache, self.videos)
+            if self.video_frame_idx_train_cache:
+                np.save(self.video_frame_idx_train_cache, self.video_frame_idx)
+            if self.images_train_cache:
+                np.save(self.images_train_cache, self.images_train)
+            if self.images_train_path_cache:
+                np.save(self.images_train_path_cache, self.images_train_path)
+            if self.masks_train_cache:
+                np.save(self.masks_train_cache, self.masks_train)
+            if self.masks_train_path_cache:
+                np.save(self.masks_train_path_cache, self.masks_train_path)
+        if self.cache_needs_refresh or self.secondary_cache_needs_refresh:
+            if self.flow_norms_train:
+                np.save(self.flow_norms_train_cache, self.flow_norms_train)
+            if self.warped_prev_masks_train:
+                np.save(self.warped_prev_masks_train_cache, self.warped_prev_masks_train)
+            if self.masks_bboxes_train:
+                np.save(self.masks_bboxes_train_cache, self.masks_bboxes_train)
 
         print("...done writing to cache.")
 
@@ -230,23 +242,7 @@ class davis16(object):
             self.cache_needs_refresh = True
             return False
 
-        # Only cache flow norms, warped previous masks, and bounding boxes
-        # These are the only buffers that MaskRNN sees as input to its CNNs
-        if self.options['use_optical_flow']:
-            if not os.path.exists(self.flow_norms_train_cache):
-                print("   a cache file does not exist")
-                self.cache_needs_refresh = True
-                return False
-        if self.options['use_warped_masks'] and not os.path.exists(self.warped_prev_masks_train_cache):
-            print("   a cache file does not exist")
-            self.cache_needs_refresh = True
-            return False
-        if self.options['use_bboxes'] and not os.path.exists(self.masks_bboxes_train_cache):
-            print("   a cache file does not exist")
-            self.cache_needs_refresh = True
-            return False
-
-        print("Loading ndarrays from cache...")
+        print("Loading main ndarrays from cache...")
 
         print(' videos container...', end="")
         self.videos = np.load(self.videos_train_cache).item()
@@ -270,6 +266,27 @@ class davis16(object):
         print(' masks_train_path container...', end="")
         self.masks_train_path = np.load(self.masks_train_path_cache)
         print(' done.')
+
+        print("...done loading main ndarrays from cache.")
+
+        # Only cache flow norms, warped previous masks, and bounding boxes
+        # These are the only buffers that MaskRNN sees as input to its CNNs
+        if self.options['use_optical_flow']:
+            if not os.path.exists(self.flow_norms_train_cache):
+                print("   a cache file does not exist")
+                self.secondary_cache_needs_refresh = True
+                return False
+            if self.options['use_warped_masks'] and not os.path.exists(self.warped_prev_masks_train_cache):
+                print("   a cache file does not exist")
+                self.secondary_cache_needs_refresh = True
+                return False
+            if self.options['use_bboxes'] and not os.path.exists(self.masks_bboxes_train_cache):
+                print("   a cache file does not exist")
+                self.secondary_cache_needs_refresh = True
+                return False
+
+        print("Loading secondary ndarrays from cache...")
+
         if self.options['use_optical_flow']:
             print(' flow_norms_train container...', end="")
             self.flow_norms_train = np.load(self.flow_norms_train_cache)
@@ -286,7 +303,7 @@ class davis16(object):
             print(' done.')
             assert (self.num_frames_train == len(self.masks_bboxes_train))
 
-        print("...done loading from cache.")
+        print("...done loading secondary ndarrays from cache.")
         return True
 
     ###
@@ -325,118 +342,119 @@ class davis16(object):
             train_paths = []
 
         if not self.options['use_cache'] or not self._load_from_cache():
-            self.cache_needs_refresh = True
-            if self.options['in_memory']:
-                base_video_names = []
+            if not self.options['use_cache'] or self.cache_needs_refresh:
+                if self.options['in_memory']:
+                    base_video_names = []
 
-                # Get the list of videos and their images
-                for line in train_paths:
-                    # img_file = os.path.join(self.dataset_root, str(line.split()[0]))
-                    # mask_file = os.path.join(self.dataset_root, str(line.split()[1]))
-                    img_file = self.dataset_root + str(line.split()[0])
-                    mask_file = self.dataset_root + str(line.split()[1])
-                    base_video_name = os.path.basename(os.path.dirname(img_file))
-                    video_name = base_video_name
-                    if video_name in self.videos:
-                        self.videos[video_name] += 1
-                        frame_idx += 1
-                    else:
-                        self.num_videos += 1
-                        self.videos[video_name] = 1
-                        frame_idx = 0
-                    video_frame = video_name + '_' + str(frame_idx)
-                    self.video_frame_idx[video_frame] = len(self.images_train_path)
-                    base_video_names.append(base_video_name)
-                    self.images_train_path.append(img_file)
-                    self.masks_train_path.append(mask_file)
+                    # Get the list of videos and their images
+                    for line in train_paths:
+                        # img_file = os.path.join(self.dataset_root, str(line.split()[0]))
+                        # mask_file = os.path.join(self.dataset_root, str(line.split()[1]))
+                        img_file = self.dataset_root + str(line.split()[0])
+                        mask_file = self.dataset_root + str(line.split()[1])
+                        base_video_name = os.path.basename(os.path.dirname(img_file))
+                        video_name = base_video_name
+                        if video_name in self.videos:
+                            self.videos[video_name] += 1
+                            frame_idx += 1
+                        else:
+                            self.num_videos += 1
+                            self.videos[video_name] = 1
+                            frame_idx = 0
+                        video_frame = video_name + '_' + str(frame_idx)
+                        self.video_frame_idx[video_frame] = len(self.images_train_path)
+                        base_video_names.append(base_video_name)
+                        self.images_train_path.append(img_file)
+                        self.masks_train_path.append(mask_file)
 
-                print('Loading training images and masks...')
-                self.num_original_frames = len(self.images_train_path)
-                for frame in trange(self.num_original_frames, ncols=80):
-                    img = Image.open(self.images_train_path[frame])
-                    mask = Image.open(self.masks_train_path[frame])
-                    img.load()
-                    mask.load()
-                    # Images such as E:\datasets\davis2016\Annotations\480p\bear\00077.png have
-                    # a different format -> convert from that format (i.e., "LA") to "L"
-                    if mask.mode == "LA":
-                        mask = mask.convert("L")
-                        tqdm.write('warning: converted {} from format "LA" to {}'.format(self.masks_train_path[frame], mask.mode))
-                        # if 76 <= frame <= 78:
-                        # print("Mask {} of mode {} is {}".format(frame, mask.mode, ))
-                    self.images_train.append(img)
-                    self.masks_train.append(mask)
-                print('...done loading training images and masks.')
+                    print('Loading training images and masks...')
+                    self.num_original_frames = len(self.images_train_path)
+                    for frame in trange(self.num_original_frames, ncols=80):
+                        img = Image.open(self.images_train_path[frame])
+                        mask = Image.open(self.masks_train_path[frame])
+                        img.load()
+                        mask.load()
+                        # Images such as E:\datasets\davis2016\Annotations\480p\bear\00077.png have
+                        # a different format -> convert from that format (i.e., "LA") to "L"
+                        if mask.mode == "LA":
+                            mask = mask.convert("L")
+                            # tqdm.write('warning: converted {} from format "LA" to {}'.format(self.masks_train_path[frame], mask.mode))
+                            # if 76 <= frame <= 78:
+                            # print("Mask {} of mode {} is {}".format(frame, mask.mode, ))
+                        self.images_train.append(img)
+                        self.masks_train.append(mask)
+                    print('...done loading training images and masks.')
 
-                # Perform scaling data augmentation on frames/masks
-                if self.options['data_aug']:
-                    print('Performing scaling data augmentation on frames/masks...')
-                    for scale_idx in trange(len(self.data_aug_scales), ncols=80):
-                        scale = self.data_aug_scales[scale_idx]
-                        for frame in trange(self.num_original_frames, ncols=80):
-                            base_video_name = base_video_names[frame]
-                            video_name = base_video_name + '_sc_' + str(scale)
-                            if video_name in self.videos:
-                                self.videos[video_name] += 1
-                                frame_idx += 1
-                            else:
-                                self.num_videos += 1
-                                self.videos[video_name] = 1
-                                frame_idx = 0
-                            img = self.images_train[frame]
-                            img_size = tuple([int(img.size[0] * scale), int(img.size[1] * scale)])
-                            img_sc = img.resize(img_size)
-                            mask = self.masks_train[frame]
-                            mask_sc = mask.resize(img_size)
-                            video_frame = video_name + '_' + str(frame_idx)
-                            self.video_frame_idx[video_frame] = len(self.images_train)
-                            base_video_names.append(video_name)
-                            self.images_train.append(img_sc)
-                            self.masks_train.append(mask_sc)
-                    print('... done performing scaling data augmentation on frames/masks.')
+                    # Perform scaling data augmentation on frames/masks
+                    if self.options['data_aug']:
+                        print('Performing scaling data augmentation on frames/masks...')
+                        for scale_idx in range(len(self.data_aug_scales)):
+                            scale = self.data_aug_scales[scale_idx]
+                            for frame in trange(self.num_original_frames, ncols=80):
+                                base_video_name = base_video_names[frame]
+                                video_name = base_video_name + '_sc_' + str(scale)
+                                if video_name in self.videos:
+                                    self.videos[video_name] += 1
+                                    frame_idx += 1
+                                else:
+                                    self.num_videos += 1
+                                    self.videos[video_name] = 1
+                                    frame_idx = 0
+                                img = self.images_train[frame]
+                                img_size = tuple([int(img.size[0] * scale), int(img.size[1] * scale)])
+                                img_sc = img.resize(img_size)
+                                mask = self.masks_train[frame]
+                                mask_sc = mask.resize(img_size)
+                                video_frame = video_name + '_' + str(frame_idx)
+                                self.video_frame_idx[video_frame] = len(self.images_train)
+                                base_video_names.append(video_name)
+                                self.images_train.append(img_sc)
+                                self.masks_train.append(mask_sc)
+                        print('... done performing scaling data augmentation on frames/masks.')
 
-                    if self.data_aug_flip:
-                        print('Performing flipping data augmentation on frames/masks...')
-                        for frame in trange(len(self.images_train), ncols=80):
-                            base_video_name =base_video_names[frame]
-                            video_name = base_video_name + '_fl'
-                            if video_name in self.videos:
-                                self.videos[video_name] += 1
-                                frame_idx += 1
-                            else:
-                                self.num_videos += 1
-                                self.videos[video_name] = 1
-                                frame_idx = 0
-                            img = self.images_train[frame]
-                            img_fl = img.transpose(Image.FLIP_LEFT_RIGHT)
-                            mask = self.masks_train[frame]
-                            mask_fl = mask.transpose(Image.FLIP_LEFT_RIGHT)
-                            video_frame = video_name + '_' + str(frame_idx)
-                            self.video_frame_idx[video_frame] = len(self.images_train)
-                            base_video_names.append(video_name)
-                            self.images_train.append(img_fl)
-                            self.masks_train.append(mask_fl)
-                        print('... done performing flipping data augmentation on frames/masks.')
+                        if self.data_aug_flip:
+                            print('Performing flipping data augmentation on frames/masks...')
+                            for frame in trange(len(self.images_train), ncols=80):
+                                base_video_name =base_video_names[frame]
+                                video_name = base_video_name + '_fl'
+                                if video_name in self.videos:
+                                    self.videos[video_name] += 1
+                                    frame_idx += 1
+                                else:
+                                    self.num_videos += 1
+                                    self.videos[video_name] = 1
+                                    frame_idx = 0
+                                img = self.images_train[frame]
+                                img_fl = img.transpose(Image.FLIP_LEFT_RIGHT)
+                                mask = self.masks_train[frame]
+                                mask_fl = mask.transpose(Image.FLIP_LEFT_RIGHT)
+                                video_frame = video_name + '_' + str(frame_idx)
+                                self.video_frame_idx[video_frame] = len(self.images_train)
+                                base_video_names.append(video_name)
+                                self.images_train.append(img_fl)
+                                self.masks_train.append(mask_fl)
+                            print('... done performing flipping data augmentation on frames/masks.')
 
-                # Convert all images and masks to numpy arrays
-                print('Converting images and masks to numpy arrays...')
-                for frame in trange(len(self.images_train), ncols=80):
-                    self.images_train[frame] = np.array(self.images_train[frame], dtype=np.uint8)
-                    assert(len(self.images_train[frame].shape) == 3)
-                    mask = np.array(self.masks_train[frame], dtype=np.uint8)
-                    mask = np.expand_dims(mask, axis=-1)
-                    self.masks_train[frame] = mask
-                    # print(self.masks_train[frame].shape)
-                    assert(len(self.masks_train[frame].shape) == 3 and mask.shape[2]==1)
-                print('...done converting images and masks to numpy arrays.')
-            else:
-               for line in train_paths:
-                    # img_file = os.path.join(self.dataset_root, str(line.split()[0]))
-                    # mask_file = os.path.join(self.dataset_root, str(line.split()[1]))
-                    img_file = self.dataset_root + str(line.split()[0])
-                    mask_file = self.dataset_root + str(line.split()[1])
-                    self.images_train_path.append(img_file)
-                    self.masks_train_path.append(mask_file)
+                    # Convert all images and masks to numpy arrays
+                    print('Converting images and masks to numpy arrays...')
+                    for frame in trange(len(self.images_train), ncols=80):
+                        self.images_train[frame] = np.array(self.images_train[frame], dtype=np.uint8)
+                        assert(len(self.images_train[frame].shape) == 3)
+                        mask = np.array(self.masks_train[frame], dtype=np.uint8)
+                        mask = np.expand_dims(mask, axis=-1)
+                        self.masks_train[frame] = mask
+                        # print(self.masks_train[frame].shape)
+                        assert(len(self.masks_train[frame].shape) == 3 and mask.shape[2]==1)
+                    print('...done converting images and masks to numpy arrays.')
+                else:
+                   for line in train_paths:
+                        # img_file = os.path.join(self.dataset_root, str(line.split()[0]))
+                        # mask_file = os.path.join(self.dataset_root, str(line.split()[1]))
+                        img_file = self.dataset_root + str(line.split()[0])
+                        mask_file = self.dataset_root + str(line.split()[1])
+                        self.images_train_path.append(img_file)
+                        self.masks_train_path.append(mask_file)
+
         # Sanity check
         for img, msk in zip(self.images_train, self.masks_train):
             assert(img.shape[0] == msk.shape[0] and img.shape[1] == msk.shape[1])
@@ -457,17 +475,35 @@ class davis16(object):
         else:
             test_paths = []
 
+        # Get the list of videos and their images
+        base_video_names = []
         self.images_test = []
         self.images_test_path = []
-        for idx, line in enumerate(test_paths):
-            if self.options['in_memory']:
-                # img = Image.open(os.path.join(self.dataset_root, str(line.split()[0])))
-                img = Image.open(os.path.join(self.dataset_root + str(line.split()[0])))
+        for line in test_paths:
+            img_file = self.dataset_root + str(line.split()[0])
+            base_video_name = os.path.basename(os.path.dirname(img_file))
+            video_name = base_video_name
+            if video_name in self.videos_test:
+                self.videos_test[video_name] += 1
+                frame_idx += 1
+            else:
+                self.num_videos_test += 1
+                self.videos_test[video_name] = 1
+                frame_idx = 0
+            video_frame = video_name + '_' + str(frame_idx)
+            self.video_frame_idx_test[video_frame] = len(self.images_test_path)
+            base_video_names.append(base_video_name)
+            self.images_test_path.append(img_file)
+
+        if self.options['in_memory']:
+            print('Loading testing images...')
+            self.num_test_frames = len(self.images_test_path)
+            for frame in trange(self.num_test_frames, ncols=80):
+                img = Image.open(self.images_test_path[frame])
+                img.load()
                 self.images_test.append(np.array(img, dtype=np.uint8))
-                if (idx + 1) % 1000 == 0:
-                    print('Loaded ' + str(idx) + ' test images')
-            # self.images_test_path.append(os.path.join(self.dataset_root, str(line.split()[0])))
-            self.images_test_path.append(os.path.join(self.dataset_root + str(line.split()[0])))
+            print('...done loading testing images.')
+
 
     ###
     ### Optical Flow and Bounding Box Helpers
@@ -475,42 +511,45 @@ class davis16(object):
     def _use_optical_flows(self):
         """Compute optical flows, use them to warp masks, save the flows' magnitudes
         """
-        print('Computing optical flows and warpping masks...')
+        print('Computing optical flows and warping masks...')
         use_warped_masks = self.options['use_warped_masks']
         with tqdm(total=len(self.videos), desc="video", ncols=80) as pbar_videos:
             # video_cnt = 0
             for video_name, frame_count in self.videos.items():
                 # pbar_videos.update(video_cnt)
-                assert (frame_count > 1)
+                assert (frame_count >= 1)
 
-                with tqdm(total=frame_count, desc="frame", ncols=80) as pbar_frames:
-                    # frame_cnt = 0
-                    # pbar_frames.update(frame_cnt)
-                    # First frame is special case (there's no previous frame)
-                    # We still call the optical flow manager so it can return an empty flow frame of the right shape
-                    cur_frame_idx = self.video_frame_idx[video_name + '_0']
-                    cur = self.images_train[cur_frame_idx]
-                    height, width = cur.shape[0], cur.shape[1]
+                # with tqdm(total=frame_count, desc="frame", ncols=80) as pbar_frames:
+                # frame_cnt = 0
+                # pbar_frames.update(frame_cnt)
+                # First frame is special case (there's no previous frame)
+                # We still call the optical flow manager so it can return an empty flow frame of the right shape
+                cur_frame_idx = self.video_frame_idx[video_name + '_0']
+                cur = self.images_train[cur_frame_idx]
+                height, width = cur.shape[0], cur.shape[1]
+                if frame_count > 1:
                     nxt = self.images_train[self.video_frame_idx[video_name + '_1']]
                     f_flow, f_flow_norm = self.optflow.compute_flow_and_norm(cur, nxt)
+                else:
                     # We still need to generate empty flows and norms
-                    b_flow, b_flow_norm = self.optflow.no_flow_and_norm(cur)
-                    # print(b_flow_norm.shape, b_flow_norm.dtype, f_flow_norm.shape, f_flow_norm.dtype)
-                    flow_norms = np.concatenate((b_flow_norm, f_flow_norm), axis=-1)
-                    # print(stacked_flows.shape, stacked_flows.dtype)
-                    self.flow_norms_train.append(flow_norms)
-                    assert(height == flow_norms.shape[0] and width == flow_norms.shape[1] and flow_norms.shape[2] == 1)
-                    # Warp masks, if requested
-                    if use_warped_masks:
-                        # First frame has no previous frame to wrap from, so just use current mask
-                        # print("appending {} {} {} to warped masks".format(type(self.masks_train[cur_frame_idx]), self.masks_train[cur_frame_idx].shape, self.masks_train[cur_frame_idx].dtype))
-                        warped_mask = self.masks_train[cur_frame_idx]
-                        self.warped_prev_masks_train.append(warped_mask)
-                        assert(height == warped_mask.shape[0] and width == warped_mask.shape[1] and warped_mask.shape[2] == 1)
-                    # frame_cnt += 1
-                    # pbar_frames.update(frame_cnt)
-                    pbar_frames.update(1)
-
+                    f_flow, f_flow_norm = self.optflow.no_flow_and_norm(cur)
+                # We still need to generate empty flows and norms
+                b_flow, b_flow_norm = self.optflow.no_flow_and_norm(cur)
+                # print(b_flow_norm.shape, b_flow_norm.dtype, f_flow_norm.shape, f_flow_norm.dtype)
+                flow_norms = np.concatenate((b_flow_norm, f_flow_norm), axis=-1)
+                # print(stacked_flows.shape, stacked_flows.dtype)
+                self.flow_norms_train.append(flow_norms)
+                assert(height == flow_norms.shape[0] and width == flow_norms.shape[1] and flow_norms.shape[2] == 2)
+                # Warp masks, if requested
+                if use_warped_masks:
+                    # First frame has no previous frame to wrap from, so just use current mask
+                    # print("appending {} {} {} to warped masks".format(type(self.masks_train[cur_frame_idx]), self.masks_train[cur_frame_idx].shape, self.masks_train[cur_frame_idx].dtype))
+                    warped_mask = self.masks_train[cur_frame_idx]
+                    self.warped_prev_masks_train.append(warped_mask)
+                    assert(height == warped_mask.shape[0] and width == warped_mask.shape[1] and warped_mask.shape[2] == 1)
+                # frame_cnt += 1
+                # pbar_frames.update(1)
+                if frame_count > 1:
                     # Other frames have a previous and next frame
                     for frame in range(1, frame_count - 1):
                         b_flow, b_flow_norm = f_flow, f_flow_norm # already computed during the last round!
@@ -520,7 +559,7 @@ class davis16(object):
                         f_flow, f_flow_norm = self.optflow.compute_flow_and_norm(cur, nxt)
                         flow_norms = np.concatenate((b_flow_norm, f_flow_norm), axis=-1)
                         self.flow_norms_train.append(flow_norms)
-                        assert (height == flow_norms.shape[0] and width == flow_norms.shape[1] and flow_norms.shape[2] == 1)
+                        assert (height == flow_norms.shape[0] and width == flow_norms.shape[1] and flow_norms.shape[2] == 2)
                         # assert (height == stacked_flows.shape[0] and width == stacked_flows.shape[1])
                         # Warp masks, if requested
                         if use_warped_masks:
@@ -530,8 +569,7 @@ class davis16(object):
                             self.warped_prev_masks_train.append(warped_mask)
                             assert(height == warped_mask.shape[0] and width == warped_mask.shape[1] and warped_mask.shape[2] == 1)
                         # frame_cnt += 1
-                        # pbar_frames.update(frame_cnt)
-                        pbar_frames.update(1)
+                        # pbar_frames.update(1)
 
                     # Last frame is special case (there's no next frame)
                     b_flow, b_flow_norm = f_flow, f_flow_norm  # already computed during the last round!
@@ -541,7 +579,7 @@ class davis16(object):
                     _, f_flow_norm = self.optflow.no_flow_and_norm(cur)
                     flow_norms = np.concatenate((b_flow_norm, f_flow_norm), axis=-1)
                     self.flow_norms_train.append(flow_norms)
-                    assert (height == flow_norms.shape[0] and width == flow_norms.shape[1] and flow_norms.shape[2] == 1)
+                    assert (height == flow_norms.shape[0] and width == flow_norms.shape[1] and flow_norms.shape[2] == 2)
                     if use_warped_masks:
                         prev_mask = self.masks_train[self.video_frame_idx[video_name + '_' + str(frame_count - 2)]]
                         warped_mask = self.optflow.warp_with_flow(prev_mask, b_flow)
@@ -549,10 +587,9 @@ class davis16(object):
                         self.warped_prev_masks_train.append(warped_mask)
                         assert (height == warped_mask.shape[0] and width == warped_mask.shape[1] and warped_mask.shape[2] == 1)
                     # frame_cnt += 1
-                    # pbar_frames.update(frame_cnt)
-                    pbar_frames.update(1)
+                    # pbar_frames.update(1)
                     # video_cnt += 1
-                    pbar_videos.update(1) # pbar_videos.update(video_cnt)
+                pbar_videos.update(1) # pbar_videos.update(video_cnt)
 
         # Sanity check after all videos
         if use_warped_masks:
@@ -562,8 +599,8 @@ class davis16(object):
         for img, msk, norm in zip(self.images_train, self.masks_train, self.flow_norms_train):
             assert(img.shape[0] == msk.shape[0] and msk.shape[1] == norm.shape[1])
             assert(img.shape[0] == norm.shape[0] and img.shape[1] == norm.shape[1])
-            assert (msk.shape[2] == 1 and norm.shape[2] == 1)
-        print('...done with computing optical flows and warpping masks.')
+            assert(msk.shape[2] == 1 and norm.shape[2] == 2)
+        print('...done with computing optical flows and warping masks.')
 
     def _use_mask_bboxes(self):
         """Compute bounding boxes of masks/warped masks

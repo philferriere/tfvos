@@ -53,9 +53,8 @@ options['data_aug'] = True
 # Set the following to wherever you have downloaded the DAVIS 2016 dataset
 dataset_root = 'E:/datasets/davis2016/' if sys.platform.startswith("win") else '/media/EDrive/datasets/davis2016/'
 test_frames = sorted(os.listdir(dataset_root + 'JPEGImages/480p/' + seq_name))
-test_imgs = [dataset_root + 'JPEGImages/480p/' + seq_name + frame for frame in test_frames]
-train_imgs = [dataset_root + 'JPEGImages/480p/' + seq_name + '00000.jpg',
-              dataset_root + 'Annotations/480p' + seq_name + '00000.png']
+test_imgs = ['JPEGImages/480p/' + seq_name + '/' + frame for frame in test_frames]
+train_imgs = ['JPEGImages/480p/' + seq_name + '/' + '00000.jpg ' + 'Annotations/480p/' + seq_name + '/' + '00000.png']
 dataset = datasets.davis16(train_imgs, test_imgs, dataset_root, options)
 
 # Display dataset configuration

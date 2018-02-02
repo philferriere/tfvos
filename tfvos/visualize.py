@@ -13,7 +13,7 @@ Based on:
         Licensed under the MIT License
 
 References for future work:
-    E:\repos\models-master\research\object_detection\utils\visualization_utils.py
+    E:/repos/models-master/research/object_detection/utils/visualization_utils.py
 """
 
 from __future__ import absolute_import
