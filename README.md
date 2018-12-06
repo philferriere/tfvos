@@ -11,7 +11,7 @@ The aim of this project is to implement and compare implementations of several *
 - [ ] MaskRNN (step 3 of 4): Implement Object Localization net Apply
 - [ ] MaskRNN (step 3 of 4): Implement RNN
 
-See the `MaskRNN Tensorflow Implementation` Section for more info.
+> **December 2018 update: This project's implementation is incomplete and no longer under active development.**
 
 ## About MaskRNN
 
